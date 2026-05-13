@@ -1,0 +1,117 @@
+name: 'Setup Papyrus-Desktop'
+description: 'Download and cache the Papyrus-Desktop RCP (bundled JustJ JRE) and install OS dependencies for headless SWT/Xvfb usage.'
+author: 'papyrus-actions'
+
+branding:
+  icon: 'package'
+  color: 'orange'
+
+inputs:
+  papyrus-version:
+    description: 'Papyrus-Desktop version, e.g. 7.1.0.'
+    required: false
+    default: '7.1.0'
+  release-train:
+    description: 'Eclipse release train this Papyrus version belongs to, e.g. 2025-06.'
+    required: false
+    default: '2025-06'
+  cache:
+    description: 'Cache the RCP install across workflow runs (true/false).'
+    required: false
+    default: 'true'
+
+outputs:
+  papyrus-home:
+    description: 'Absolute path to the extracted Papyrus-Desktop installation (the folder that contains the "papyrus-desktop" launcher).'
+    value: ${{ steps.locate.outputs.papyrus-home }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Pre-compute the install path so subsequent steps and the cache action agree on it.
+    - name: Resolve install paths
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        INSTALL_DIR="${RUNNER_TOOL_CACHE}/papyrus-desktop/${{ inputs.papyrus-version }}"
+        echo "install-dir=${INSTALL_DIR}" >> "$GITHUB_OUTPUT"
+        echo "PAPYRUS_INSTALL_DIR=${INSTALL_DIR}" >> "$GITHUB_ENV"
+
+    - name: Cache Papyrus-Desktop install
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.paths.outputs.install-dir }}
+        # Bump the trailing version when this action changes its install layout
+        # in a way that's incompatible with previously cached folders.
+        key: papyrus-desktop-${{ inputs.release-train }}-${{ inputs.papyrus-version }}-linux-x86_64-v1
+
+    - name: Install OS dependencies (Xvfb, SWT runtime libs, fonts)
+      shell: bash
+      run: |
+        set -euo pipefail
+        # These are needed every run regardless of whether Papyrus itself is cached:
+        # actions/cache doesn't restore apt-installed packages.
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          xvfb \
+          libgtk-3-0 \
+          libxtst6 \
+          libxrender1 \
+          libxi6 \
+          libglu1-mesa \
+          fontconfig \
+          fonts-dejavu \
+          fonts-liberation \
+          x11-utils
+
+    - name: Download and extract Papyrus-Desktop RCP
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PAPYRUS_VERSION: ${{ inputs.papyrus-version }}
+        RELEASE_TRAIN:   ${{ inputs.release-train }}
+        INSTALL_DIR:     ${{ steps.paths.outputs.install-dir }}
+      run: |
+        set -euxo pipefail
+        mkdir -p "${INSTALL_DIR}"
+
+        # The "&r=1" suffix asks Eclipse's download.php for a redirect to the
+        # nearest mirror that actually serves the file; curl -L follows it.
+        FILE="papyrus-desktop-${RELEASE_TRAIN}-${PAPYRUS_VERSION}-linux.gtk.x86_64.tar.gz"
+        URL="https://www.eclipse.org/downloads/download.php?file=/modeling/mdt/papyrus/papyrus-desktop/rcp/${RELEASE_TRAIN}/${PAPYRUS_VERSION}/${FILE}&r=1"
+
+        echo "Downloading ${URL}"
+        curl --fail --location --retry 5 --retry-delay 3 -o /tmp/papyrus.tar.gz "${URL}"
+
+        # The archive contains a top-level "papyrus-desktop" folder. Strip it so
+        # that the launcher ends up directly inside ${INSTALL_DIR}.
+        tar -xzf /tmp/papyrus.tar.gz -C "${INSTALL_DIR}" --strip-components=1
+        rm /tmp/papyrus.tar.gz
+
+    - name: Locate the launcher and validate the install
+      id: locate
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.paths.outputs.install-dir }}
+      run: |
+        set -euo pipefail
+        # The launcher script is "papyrus-desktop". Older bundles called it
+        # "papyrus" or "eclipse". Pick whichever exists.
+        for cand in papyrus-desktop papyrus eclipse; do
+          if [[ -x "${INSTALL_DIR}/${cand}" ]]; then
+            LAUNCHER="${INSTALL_DIR}/${cand}"
+            break
+          fi
+        done
+        if [[ -z "${LAUNCHER:-}" ]]; then
+          echo "::error::Could not find a Papyrus-Desktop launcher inside ${INSTALL_DIR}"
+          ls -la "${INSTALL_DIR}" || true
+          exit 1
+        fi
+        echo "papyrus-home=${INSTALL_DIR}"   >> "$GITHUB_OUTPUT"
+        echo "PAPYRUS_HOME=${INSTALL_DIR}"   >> "$GITHUB_ENV"
+        echo "PAPYRUS_LAUNCHER=${LAUNCHER}"  >> "$GITHUB_ENV"
+        echo "Papyrus-Desktop is ready at ${INSTALL_DIR}"

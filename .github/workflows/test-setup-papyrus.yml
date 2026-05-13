@@ -1,0 +1,22 @@
+name: "Test: setup-papyrus"
+description: Tests the setup-papyrus action.
+
+on:
+  push: {}
+  pull_request: {}
+
+jobs:
+  test-setup-papyrus:
+    name: "Test: setup-papyrus"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./
+      - name: Verify Papyrus installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "${{ steps.locate.outputs.papyrus-home }}/papyrus-desktop" ]; then
+            echo "Papyrus-Desktop launcher not found in expected location: ${{ steps.locate.outputs.papyrus-home }}/papyrus-desktop"
+            exit 1
+          fi
+          echo "Papyrus-Desktop installation verified at ${{ steps.locate.outputs.papyrus-home }}"
