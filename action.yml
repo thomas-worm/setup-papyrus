@@ -1,6 +1,6 @@
 name: 'Setup Papyrus-Desktop'
 description: 'Download and cache the Papyrus-Desktop RCP (bundled JustJ JRE) and install OS dependencies for headless SWT/Xvfb usage.'
-author: 'papyrus-actions'
+author: 'Thomas Worm'
 
 branding:
   icon: 'package'

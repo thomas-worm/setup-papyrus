@@ -10,13 +10,17 @@ jobs:
     name: "Test: setup-papyrus"
     runs-on: ubuntu-latest
     steps:
-      - uses: ./
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Run setup-papyrus action
+        id: setup
+        uses: ./
       - name: Verify Papyrus installation
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f "${{ steps.locate.outputs.papyrus-home }}/papyrus-desktop" ]; then
-            echo "Papyrus-Desktop launcher not found in expected location: ${{ steps.locate.outputs.papyrus-home }}/papyrus-desktop"
+          if [ ! -f "${{ steps.setup.outputs.papyrus-home }}/papyrus-desktop" ]; then
+            echo "Papyrus-Desktop launcher not found in expected location: ${{ steps.setup.outputs.papyrus-home }}/papyrus-desktop"
             exit 1
           fi
-          echo "Papyrus-Desktop installation verified at ${{ steps.locate.outputs.papyrus-home }}"
+          echo "Papyrus-Desktop installation verified at ${{ steps.setup.outputs.papyrus-home }}"
