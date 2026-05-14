@@ -1,5 +1,4 @@
 name: "Test: setup-papyrus"
-description: Tests the setup-papyrus action.
 
 on:
   push: {}
@@ -7,20 +6,45 @@ on:
 
 jobs:
   test-setup-papyrus:
-    name: "Test: setup-papyrus"
-    runs-on: ubuntu-latest
+    name: "Test: setup-papyrus (${{ matrix.os }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
       - name: Run setup-papyrus action
         id: setup
         uses: ./
+
       - name: Verify Papyrus installation
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f "${{ steps.setup.outputs.papyrus-home }}/papyrus-desktop" ]; then
-            echo "Papyrus-Desktop launcher not found in expected location: ${{ steps.setup.outputs.papyrus-home }}/papyrus-desktop"
+          HOME_DIR='${{ steps.setup.outputs.papyrus-home }}'
+          LAUNCHER='${{ steps.setup.outputs.papyrus-launcher }}'
+          echo "papyrus-home=${HOME_DIR}"
+          echo "papyrus-launcher=${LAUNCHER}"
+          if [ ! -d "${HOME_DIR}" ]; then
+            echo "::error::papyrus-home is not a directory"
             exit 1
           fi
-          echo "Papyrus-Desktop installation verified at ${{ steps.setup.outputs.papyrus-home }}"
+          if [ ! -e "${LAUNCHER}" ]; then
+            echo "::error::launcher does not exist"
+            exit 1
+          fi
+          # Sanity: plugins directory should exist and contain at least one Papyrus jar.
+          PLUGINS_DIR="${HOME_DIR}/plugins"
+          if [ ! -d "${PLUGINS_DIR}" ]; then
+            echo "::error::plugins directory missing at ${PLUGINS_DIR}"
+            exit 1
+          fi
+          if ! ls "${PLUGINS_DIR}" | grep -q '^org.eclipse.papyrus' ; then
+            echo "::error::no org.eclipse.papyrus.* plugins found under ${PLUGINS_DIR}"
+            ls "${PLUGINS_DIR}" | head -20 || true
+            exit 1
+          fi
+          echo "Papyrus-Desktop installation verified."
