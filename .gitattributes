@@ -1,0 +1,26 @@
+# Default: detect text vs binary automatically, normalise EOL to LF on
+# checkin so contributors on Windows don't accidentally introduce CRLF.
+* text=auto eol=lf
+
+# --- GitHub Actions / shell -----------------------------------------------
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# --- Docs -----------------------------------------------------------------
+*.md text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+
+# --- Binary assets --------------------------------------------------------
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.dmg binary

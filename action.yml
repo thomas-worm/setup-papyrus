@@ -1,0 +1,306 @@
+name: 'Setup Papyrus-Desktop'
+description: 'Download Papyrus-Desktop (bundles JustJ JRE 21). Supports Linux x86_64, macOS x86_64/aarch64, Windows x86_64.'
+author: 'Thomas Worm'
+
+branding:
+  icon: 'package'
+  color: 'orange'
+
+inputs:
+  papyrus-version:
+    description: 'Papyrus-Desktop version, e.g. 7.1.0.'
+    required: false
+    default: '7.1.0'
+  release-train:
+    description: 'Eclipse release train this Papyrus version belongs to, e.g. 2025-06.'
+    required: false
+    default: '2025-06'
+  cache:
+    description: 'Cache the RCP install across workflow runs (true/false).'
+    required: false
+    default: 'true'
+
+outputs:
+  papyrus-home:
+    description: 'Absolute path to the extracted Papyrus-Desktop installation (the folder that contains the launcher / the .app bundle).'
+    value: ${{ steps.locate.outputs.papyrus-home }}
+  papyrus-launcher:
+    description: 'Absolute path to the Papyrus-Desktop launcher executable for this OS.'
+    value: ${{ steps.locate.outputs.papyrus-launcher }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Resolve OS + arch + archive filename + install path. Every subsequent
+    # step references these so the rest of the action stays OS-agnostic.
+    - name: Resolve paths and artifact name
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        case "${RUNNER_OS}" in
+          Linux)
+            case "${RUNNER_ARCH}" in
+              X64)
+                ECLIPSE_SUFFIX=linux.gtk.x86_64
+                ARCHIVE_EXT=tar.gz
+                ;;
+              *)
+                echo "::error::Unsupported Linux arch ${RUNNER_ARCH} (only X64 is published for Papyrus)"
+                exit 1
+                ;;
+            esac
+            ;;
+          macOS)
+            case "${RUNNER_ARCH}" in
+              X64)   ECLIPSE_SUFFIX=macosx.cocoa.x86_64 ;;
+              ARM64) ECLIPSE_SUFFIX=macosx.cocoa.aarch64 ;;
+              *) echo "::error::Unsupported macOS arch ${RUNNER_ARCH}"; exit 1 ;;
+            esac
+            ARCHIVE_EXT=dmg
+            ;;
+          Windows)
+            case "${RUNNER_ARCH}" in
+              X64)
+                ECLIPSE_SUFFIX=win32.win32.x86_64
+                ARCHIVE_EXT=zip
+                ;;
+              *) echo "::error::Unsupported Windows arch ${RUNNER_ARCH}"; exit 1 ;;
+            esac
+            ;;
+          *) echo "::error::Unsupported RUNNER_OS ${RUNNER_OS}"; exit 1 ;;
+        esac
+
+        ARCHIVE="papyrus-desktop-${{ inputs.release-train }}-${{ inputs.papyrus-version }}-${ECLIPSE_SUFFIX}.${ARCHIVE_EXT}"
+        INSTALL_DIR="${RUNNER_TOOL_CACHE}/papyrus-desktop/${{ inputs.papyrus-version }}-${ECLIPSE_SUFFIX}"
+
+        echo "eclipse-suffix=${ECLIPSE_SUFFIX}" >> "$GITHUB_OUTPUT"
+        echo "archive-ext=${ARCHIVE_EXT}"       >> "$GITHUB_OUTPUT"
+        echo "archive=${ARCHIVE}"               >> "$GITHUB_OUTPUT"
+        echo "install-dir=${INSTALL_DIR}"       >> "$GITHUB_OUTPUT"
+        echo "cache-key=papyrus-desktop-${{ inputs.release-train }}-${{ inputs.papyrus-version }}-${ECLIPSE_SUFFIX}-v2" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Papyrus-Desktop install
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.paths.outputs.install-dir }}
+        key: ${{ steps.paths.outputs.cache-key }}
+
+    # Linux runners need Xvfb + SWT runtime libs + a font set wide enough to
+    # cover macOS-authored models. macOS and Windows runners have a native
+    # display server and a built-in font set wide enough for typical models
+    # (Arial / .AppleSystemUIFont / Helvetica / Segoe UI all resolve there).
+    - name: Install OS dependencies (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        set -euo pipefail
+        sudo apt-get update -y
+        # ttf-mscorefonts-installer needs EULA acceptance up front.
+        echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true \
+          | sudo debconf-set-selections
+        sudo apt-get install -y --no-install-recommends \
+          xvfb \
+          libgtk-3-0 \
+          libxtst6 \
+          libxrender1 \
+          libxi6 \
+          libglu1-mesa \
+          x11-utils \
+          fontconfig \
+          fonts-liberation fonts-liberation2 \
+          fonts-dejavu \
+          fonts-noto fonts-noto-cjk \
+          fonts-crosextra-carlito \
+          fonts-crosextra-caladea \
+          fonts-inter \
+          ttf-mscorefonts-installer
+        sudo fc-cache -f
+
+    - name: Install Inter font (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Inter is the closest free substitute for the macOS system
+        # font; install it so models authored against San Francisco
+        # render identically through Java's font system on macOS too.
+        # Homebrew on GitHub runners is non-interactive.
+        if command -v brew >/dev/null 2>&1; then
+          brew install --cask --quiet font-inter || \
+            echo "::warning::Inter install via brew failed; falling back to system fonts"
+        fi
+
+    - name: Install Inter font (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Download Inter v4.1 release ZIP from rsms/inter (SIL OFL,
+        # freely redistributable) and copy each Regular TTF into the
+        # system Fonts folder.
+        $tmp = Join-Path $env:RUNNER_TEMP 'inter'
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $zip = Join-Path $tmp 'Inter.zip'
+        Invoke-WebRequest `
+          -Uri 'https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip' `
+          -OutFile $zip
+        Expand-Archive -Force -Path $zip -DestinationPath $tmp
+        # Install the static TTFs (Regular weight is enough for the
+        # SVG @font-face fallback; the rest are nice to have for
+        # native rendering inside Papyrus).
+        Get-ChildItem -Path "$tmp\extras\ttf" -Filter 'Inter-*.ttf' | ForEach-Object {
+          Copy-Item -Force -Path $_.FullName -Destination "$env:WINDIR\Fonts\$($_.Name)"
+          $reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+          New-ItemProperty -Path $reg -Name "$($_.BaseName) (TrueType)" `
+            -Value $_.Name -PropertyType String -Force | Out-Null
+        }
+        # Refresh the font cache so AWT/SWT pick up the new fonts.
+        [System.Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null
+        Write-Host "Installed Inter TTFs to $env:WINDIR\Fonts"
+
+    - name: Download and extract Papyrus-Desktop (Linux)
+      if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.paths.outputs.install-dir }}
+        ARCHIVE:     ${{ steps.paths.outputs.archive }}
+        RELEASE:     ${{ inputs.release-train }}
+        VERSION:     ${{ inputs.papyrus-version }}
+      run: |
+        set -euxo pipefail
+        mkdir -p "${INSTALL_DIR}"
+        URL="https://www.eclipse.org/downloads/download.php?file=/modeling/mdt/papyrus/papyrus-desktop/rcp/${RELEASE}/${VERSION}/${ARCHIVE}&r=1"
+        echo "Downloading ${URL}"
+        curl --fail --location --retry 5 --retry-delay 3 -o /tmp/papyrus.tar.gz "${URL}"
+        # Archive's top-level folder is "papyrus-desktop"; strip it.
+        tar -xzf /tmp/papyrus.tar.gz -C "${INSTALL_DIR}" --strip-components=1
+        rm -f /tmp/papyrus.tar.gz
+
+    - name: Download and extract Papyrus-Desktop (macOS)
+      if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.paths.outputs.install-dir }}
+        ARCHIVE:     ${{ steps.paths.outputs.archive }}
+        RELEASE:     ${{ inputs.release-train }}
+        VERSION:     ${{ inputs.papyrus-version }}
+      run: |
+        set -euxo pipefail
+        mkdir -p "${INSTALL_DIR}"
+        URL="https://www.eclipse.org/downloads/download.php?file=/modeling/mdt/papyrus/papyrus-desktop/rcp/${RELEASE}/${VERSION}/${ARCHIVE}&r=1"
+        DMG=/tmp/papyrus.dmg
+        echo "Downloading ${URL}"
+        curl --fail --location --retry 5 --retry-delay 3 -o "${DMG}" "${URL}"
+
+        MOUNT=/tmp/papyrus-dmg
+        mkdir -p "${MOUNT}"
+        hdiutil attach -nobrowse -readonly -mountpoint "${MOUNT}" "${DMG}"
+        # The DMG contains a Papyrus-Desktop.app bundle. Copy it into
+        # ${INSTALL_DIR}, mirroring the Linux layout (everything sits
+        # directly under INSTALL_DIR, so the launcher path search below
+        # only needs one place to look).
+        cp -R "${MOUNT}"/*.app "${INSTALL_DIR}/"
+        hdiutil detach "${MOUNT}"
+        rm -f "${DMG}"
+
+        # macOS quarantines downloaded binaries; clear it so we can launch
+        # without Gatekeeper blocking us in a non-interactive runner.
+        xattr -dr com.apple.quarantine "${INSTALL_DIR}" || true
+
+    - name: Download and extract Papyrus-Desktop (Windows)
+      if: runner.os == 'Windows' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.paths.outputs.install-dir }}
+        ARCHIVE:     ${{ steps.paths.outputs.archive }}
+        RELEASE:     ${{ inputs.release-train }}
+        VERSION:     ${{ inputs.papyrus-version }}
+      run: |
+        set -euxo pipefail
+        mkdir -p "${INSTALL_DIR}"
+        URL="https://www.eclipse.org/downloads/download.php?file=/modeling/mdt/papyrus/papyrus-desktop/rcp/${RELEASE}/${VERSION}/${ARCHIVE}&r=1"
+        ZIP=/tmp/papyrus.zip
+        echo "Downloading ${URL}"
+        curl --fail --location --retry 5 --retry-delay 3 -o "${ZIP}" "${URL}"
+        # The Windows .zip archive has a "papyrus-desktop" root folder
+        # (same as the Linux .tar.gz). Strip it.
+        TEMP_EXTRACT="${RUNNER_TEMP}/papyrus-zip-extract"
+        rm -rf "${TEMP_EXTRACT}"
+        mkdir -p "${TEMP_EXTRACT}"
+        unzip -q "${ZIP}" -d "${TEMP_EXTRACT}"
+        # Move the contents of the single top-level dir into INSTALL_DIR.
+        TOP=$(find "${TEMP_EXTRACT}" -mindepth 1 -maxdepth 1 -type d | head -n1)
+        if [ -n "${TOP}" ]; then
+          cp -R "${TOP}"/* "${INSTALL_DIR}/"
+        else
+          # Defensive: archive didn't have a single top dir.
+          cp -R "${TEMP_EXTRACT}"/* "${INSTALL_DIR}/"
+        fi
+        rm -rf "${ZIP}" "${TEMP_EXTRACT}"
+
+    - name: Locate the launcher and validate the install
+      id: locate
+      shell: bash
+      env:
+        INSTALL_DIR: ${{ steps.paths.outputs.install-dir }}
+      run: |
+        set -euo pipefail
+
+        case "${RUNNER_OS}" in
+          Linux)
+            for cand in papyrus-desktop papyrus eclipse; do
+              [[ -x "${INSTALL_DIR}/${cand}" ]] && LAUNCHER="${INSTALL_DIR}/${cand}" && break
+            done
+            PAPYRUS_HOME="${INSTALL_DIR}"
+            ;;
+          macOS)
+            # The .app bundle is the install root for tooling that respects
+            # macOS conventions, but our action invokes the launcher binary
+            # directly. Both paths are surfaced as outputs.
+            APP=$(find "${INSTALL_DIR}" -maxdepth 2 -name '*.app' -type d | head -n1 || true)
+            if [ -z "${APP}" ]; then
+              echo "::error::No .app bundle found in ${INSTALL_DIR}"
+              ls -la "${INSTALL_DIR}" || true
+              exit 1
+            fi
+            for cand in papyrus-desktop Papyrus-Desktop papyrus eclipse; do
+              if [[ -x "${APP}/Contents/MacOS/${cand}" ]]; then
+                LAUNCHER="${APP}/Contents/MacOS/${cand}"
+                break
+              fi
+            done
+            PAPYRUS_HOME="${APP}/Contents/Eclipse"
+            if [ ! -d "${PAPYRUS_HOME}" ]; then
+              # Older Papyrus / Eclipse layouts: plugins live directly under Contents.
+              PAPYRUS_HOME="${APP}/Contents"
+            fi
+            ;;
+          Windows)
+            for cand in papyrus-desktop.exe papyrus-desktopc.exe papyrus.exe eclipse.exe eclipsec.exe; do
+              if [[ -f "${INSTALL_DIR}/${cand}" ]]; then
+                LAUNCHER="${INSTALL_DIR}/${cand}"
+                break
+              fi
+            done
+            PAPYRUS_HOME="${INSTALL_DIR}"
+            ;;
+        esac
+
+        if [[ -z "${LAUNCHER:-}" ]]; then
+          echo "::error::Could not find a Papyrus-Desktop launcher inside ${INSTALL_DIR}"
+          find "${INSTALL_DIR}" -maxdepth 3 -type f 2>/dev/null | head -50 || true
+          exit 1
+        fi
+
+        echo "papyrus-home=${PAPYRUS_HOME}"     >> "$GITHUB_OUTPUT"
+        echo "papyrus-launcher=${LAUNCHER}"     >> "$GITHUB_OUTPUT"
+        echo "PAPYRUS_HOME=${PAPYRUS_HOME}"     >> "$GITHUB_ENV"
+        echo "PAPYRUS_LAUNCHER=${LAUNCHER}"     >> "$GITHUB_ENV"
+        echo "Papyrus-Desktop is ready at ${PAPYRUS_HOME}"
+        echo "Launcher: ${LAUNCHER}"

@@ -1,0 +1,55 @@
+name: "Test: setup-papyrus"
+
+on:
+  push: {}
+  pull_request: {}
+
+jobs:
+  test-setup-papyrus:
+    name: "Test: setup-papyrus (${{ matrix.os }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run setup-papyrus action
+        id: setup
+        uses: ./
+
+      - name: Verify Papyrus installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOME_DIR='${{ steps.setup.outputs.papyrus-home }}'
+          LAUNCHER='${{ steps.setup.outputs.papyrus-launcher }}'
+          echo "papyrus-home=${HOME_DIR}"
+          echo "papyrus-launcher=${LAUNCHER}"
+          if [ ! -d "${HOME_DIR}" ]; then
+            echo "::error::papyrus-home is not a directory"
+            exit 1
+          fi
+          if [ ! -e "${LAUNCHER}" ]; then
+            echo "::error::launcher does not exist"
+            exit 1
+          fi
+          # Sanity: plugins directory should exist and contain at least one Papyrus jar.
+          PLUGINS_DIR="${HOME_DIR}/plugins"
+          if [ ! -d "${PLUGINS_DIR}" ]; then
+            echo "::error::plugins directory missing at ${PLUGINS_DIR}"
+            exit 1
+          fi
+          # find … -print -quit prints the first match and exits; using a
+          # pipe to grep -q triggers SIGPIPE on ls which pipefail then
+          # reports as failure even though the match succeeded.
+          FIRST_PAPYRUS=$(find "${PLUGINS_DIR}" -maxdepth 1 -name 'org.eclipse.papyrus*' -print -quit 2>/dev/null || true)
+          if [ -z "${FIRST_PAPYRUS}" ]; then
+            echo "::error::no org.eclipse.papyrus.* plugins found under ${PLUGINS_DIR}"
+            ls "${PLUGINS_DIR}" 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          echo "Found Papyrus plugin: $(basename "${FIRST_PAPYRUS}")"
+          echo "Papyrus-Desktop installation verified."
