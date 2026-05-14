@@ -118,8 +118,51 @@ runs:
           fonts-noto fonts-noto-cjk \
           fonts-crosextra-carlito \
           fonts-crosextra-caladea \
+          fonts-inter \
           ttf-mscorefonts-installer
         sudo fc-cache -f
+
+    - name: Install Inter font (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Inter is the closest free substitute for the macOS system
+        # font; install it so models authored against San Francisco
+        # render identically through Java's font system on macOS too.
+        # Homebrew on GitHub runners is non-interactive.
+        if command -v brew >/dev/null 2>&1; then
+          brew install --cask --quiet font-inter || \
+            echo "::warning::Inter install via brew failed; falling back to system fonts"
+        fi
+
+    - name: Install Inter font (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Download Inter v4.1 release ZIP from rsms/inter (SIL OFL,
+        # freely redistributable) and copy each Regular TTF into the
+        # system Fonts folder.
+        $tmp = Join-Path $env:RUNNER_TEMP 'inter'
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        $zip = Join-Path $tmp 'Inter.zip'
+        Invoke-WebRequest `
+          -Uri 'https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip' `
+          -OutFile $zip
+        Expand-Archive -Force -Path $zip -DestinationPath $tmp
+        # Install the static TTFs (Regular weight is enough for the
+        # SVG @font-face fallback; the rest are nice to have for
+        # native rendering inside Papyrus).
+        Get-ChildItem -Path "$tmp\extras\ttf" -Filter 'Inter-*.ttf' | ForEach-Object {
+          Copy-Item -Force -Path $_.FullName -Destination "$env:WINDIR\Fonts\$($_.Name)"
+          $reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+          New-ItemProperty -Path $reg -Name "$($_.BaseName) (TrueType)" `
+            -Value $_.Name -PropertyType String -Force | Out-Null
+        }
+        # Refresh the font cache so AWT/SWT pick up the new fonts.
+        [System.Reflection.Assembly]::LoadWithPartialName('System.Drawing') | Out-Null
+        Write-Host "Installed Inter TTFs to $env:WINDIR\Fonts"
 
     - name: Download and extract Papyrus-Desktop (Linux)
       if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
