@@ -42,9 +42,14 @@ jobs:
             echo "::error::plugins directory missing at ${PLUGINS_DIR}"
             exit 1
           fi
-          if ! ls "${PLUGINS_DIR}" | grep -q '^org.eclipse.papyrus' ; then
+          # find … -print -quit prints the first match and exits; using a
+          # pipe to grep -q triggers SIGPIPE on ls which pipefail then
+          # reports as failure even though the match succeeded.
+          FIRST_PAPYRUS=$(find "${PLUGINS_DIR}" -maxdepth 1 -name 'org.eclipse.papyrus*' -print -quit 2>/dev/null || true)
+          if [ -z "${FIRST_PAPYRUS}" ]; then
             echo "::error::no org.eclipse.papyrus.* plugins found under ${PLUGINS_DIR}"
-            ls "${PLUGINS_DIR}" | head -20 || true
+            ls "${PLUGINS_DIR}" 2>/dev/null | head -20 || true
             exit 1
           fi
+          echo "Found Papyrus plugin: $(basename "${FIRST_PAPYRUS}")"
           echo "Papyrus-Desktop installation verified."
